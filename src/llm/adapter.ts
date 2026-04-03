@@ -37,33 +37,46 @@ import type { LLMAdapter } from '../types.js'
  * Additional providers can be integrated by implementing {@link LLMAdapter}
  * directly and bypassing this factory.
  */
-export type SupportedProvider = 'anthropic' | 'openai'
+export type SupportedProvider = 'anthropic' | 'copilot' | 'openai'
 
 /**
  * Instantiate the appropriate {@link LLMAdapter} for the given provider.
  *
- * API keys fall back to the standard environment variables
- * (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`) when not supplied explicitly.
+ * API keys fall back to the standard environment variables when not supplied
+ * explicitly:
+ * - `anthropic` → `ANTHROPIC_API_KEY`
+ * - `openai`    → `OPENAI_API_KEY`
+ * - `copilot`   → `GITHUB_COPILOT_TOKEN` / `GITHUB_TOKEN`, or interactive
+ *                  OAuth2 device flow if neither is set
  *
  * Adapters are imported lazily so that projects using only one provider
  * are not forced to install the SDK for the other.
  *
  * @param provider - Which LLM provider to target.
  * @param apiKey   - Optional API key override; falls back to env var.
+ * @param baseURL  - Optional base URL for OpenAI-compatible APIs (Ollama, vLLM, etc.).
  * @throws {Error} When the provider string is not recognised.
  */
 export async function createAdapter(
   provider: SupportedProvider,
   apiKey?: string,
+  baseURL?: string,
 ): Promise<LLMAdapter> {
   switch (provider) {
     case 'anthropic': {
       const { AnthropicAdapter } = await import('./anthropic.js')
-      return new AnthropicAdapter(apiKey)
+      return new AnthropicAdapter(apiKey, baseURL)
+    }
+    case 'copilot': {
+      if (baseURL) {
+        console.warn('[open-multi-agent] baseURL is not supported for the copilot provider and will be ignored.')
+      }
+      const { CopilotAdapter } = await import('./copilot.js')
+      return new CopilotAdapter(apiKey)
     }
     case 'openai': {
       const { OpenAIAdapter } = await import('./openai.js')
-      return new OpenAIAdapter(apiKey)
+      return new OpenAIAdapter(apiKey, baseURL)
     }
     default: {
       // The `never` cast here makes TypeScript enforce exhaustiveness.
