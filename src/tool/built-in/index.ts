@@ -8,12 +8,23 @@
 import type { ToolDefinition } from '../../types.js'
 import { ToolRegistry } from '../framework.js'
 import { bashTool } from './bash.js'
+import { delegateToAgentTool } from './delegate.js'
 import { fileEditTool } from './file-edit.js'
 import { fileReadTool } from './file-read.js'
 import { fileWriteTool } from './file-write.js'
+import { globTool } from './glob.js'
 import { grepTool } from './grep.js'
 
-export { bashTool, fileEditTool, fileReadTool, fileWriteTool, grepTool }
+export { bashTool, delegateToAgentTool, fileEditTool, fileReadTool, fileWriteTool, globTool, grepTool }
+
+/** Options for {@link registerBuiltInTools}. */
+export interface RegisterBuiltInToolsOptions {
+  /**
+   * When true, registers `delegate_to_agent` (team orchestration handoff).
+   * Default false so standalone agents and `runAgent` do not expose a tool that always errors.
+   */
+  readonly includeDelegateTool?: boolean
+}
 
 /**
  * The ordered list of all built-in tools.  Import this when you need to
@@ -29,6 +40,13 @@ export const BUILT_IN_TOOLS: ToolDefinition<any>[] = [
   fileWriteTool,
   fileEditTool,
   grepTool,
+  globTool,
+]
+
+/** All built-ins including `delegate_to_agent` (for team registry setup). */
+export const ALL_BUILT_IN_TOOLS_WITH_DELEGATE: ToolDefinition<any>[] = [
+  ...BUILT_IN_TOOLS,
+  delegateToAgentTool,
 ]
 
 /**
@@ -43,8 +61,14 @@ export const BUILT_IN_TOOLS: ToolDefinition<any>[] = [
  * registerBuiltInTools(registry)
  * ```
  */
-export function registerBuiltInTools(registry: ToolRegistry): void {
+export function registerBuiltInTools(
+  registry: ToolRegistry,
+  options?: RegisterBuiltInToolsOptions,
+): void {
   for (const tool of BUILT_IN_TOOLS) {
     registry.register(tool)
+  }
+  if (options?.includeDelegateTool) {
+    registry.register(delegateToAgentTool)
   }
 }

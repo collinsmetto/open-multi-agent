@@ -10,9 +10,10 @@ npm run dev            # Watch mode compilation
 npm run lint           # Type-check only (tsc --noEmit)
 npm test               # Run all tests (vitest run)
 npm run test:watch     # Vitest watch mode
+node dist/cli/oma.js help   # After build: shell/CI CLI (`oma` when installed via npm bin)
 ```
 
-Tests live in `tests/` (vitest). Examples in `examples/` are standalone scripts requiring API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`).
+Tests live in `tests/` (vitest). Examples in `examples/` are standalone scripts requiring API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). CLI usage and JSON schemas: `docs/cli.md`.
 
 ## Architecture
 
@@ -45,7 +46,7 @@ This is the framework's key feature. When `runTeam()` is called:
 | Task | `task/queue.ts`, `task/task.ts` | Dependency-aware queue, auto-unblock on completion, cascade failure to dependents |
 | Tool | `tool/framework.ts`, `tool/executor.ts`, `tool/built-in/` | `defineTool()` with Zod schemas, ToolRegistry, parallel batch execution with concurrency semaphore |
 | LLM | `llm/adapter.ts`, `llm/anthropic.ts`, `llm/openai.ts` | `LLMAdapter` interface (`chat` + `stream`), factory `createAdapter()` |
-| Memory | `memory/shared.ts`, `memory/store.ts` | Namespaced key-value store (`agentName/key`), markdown summary injection into prompts |
+| Memory | `memory/shared.ts`, `memory/store.ts` | Namespaced key-value store (`agentName/key`), markdown summary injection into prompts. Custom backends via `TeamConfig.sharedMemoryStore` (any `MemoryStore` impl); `sharedMemory: true` uses the default in-process store |
 | Types | `types.ts` | All interfaces in one file to avoid circular deps |
 | Exports | `index.ts` | Public API surface |
 
@@ -55,7 +56,7 @@ This is the framework's key feature. When `runTeam()` is called:
 
 ### Concurrency Control
 
-Two independent semaphores: `AgentPool` (max concurrent agent runs, default 5) and `ToolExecutor` (max concurrent tool calls, default 4).
+Three semaphore layers: `AgentPool` pool-level (max concurrent agent runs, default 5), `AgentPool` per-agent mutex (serializes concurrent runs on the same `Agent` instance), and `ToolExecutor` (max concurrent tool calls, default 4).
 
 ### Structured Output
 
@@ -73,7 +74,21 @@ Optional `maxRetries`, `retryDelayMs`, `retryBackoff` on task config (used via `
 
 ### Built-in Tools
 
-`bash`, `file_read`, `file_write`, `file_edit`, `grep` — registered via `registerBuiltInTools(registry)`.
+`bash`, `file_read`, `file_write`, `file_edit`, `grep`, `glob` — registered via `registerBuiltInTools(registry)`. `delegate_to_agent` is opt-in (`registerBuiltInTools(registry, { includeDelegateTool: true })`) and only wired up inside pool workers by `runTeam`/`runTasks` — see "Agent Delegation" below.
+
+### Agent Delegation
+
+`delegate_to_agent` (in `src/tool/built-in/delegate.ts`) lets an agent synchronously hand a sub-prompt to another roster agent and receive its final output as a tool result. Only active during orchestrated runs; standalone `runAgent` and the `runTeam` short-circuit path (`isSimpleGoal` hit) do not inject it.
+
+Guards (all enforced in the tool itself, before `runDelegatedAgent` is called):
+
+- **Self-delegation:** rejected (`target === context.agent.name`)
+- **Unknown agent:** rejected (target not in team roster)
+- **Cycle detection:** rejected if target already in `TeamInfo.delegationChain` (prevents `A → B → A` from burning tokens up to the depth cap)
+- **Depth cap:** `OrchestratorConfig.maxDelegationDepth` (default 3)
+- **Pool deadlock:** rejected when `AgentPool.availableRunSlots < 1`, without calling the pool
+
+The delegated run's `AgentRunResult.tokenUsage` is surfaced via `ToolResult.metadata.tokenUsage`; the runner accumulates it into `totalUsage` before the next `maxTokenBudget` check, so delegation cannot silently bypass the parent's budget. Delegation tool_result blocks are exempt from `compressToolResults` and the `compact` context strategy so the parent agent retains the full sub-agent output across turns. Best-effort SharedMemory audit writes at `{caller}/delegation:{target}:{timestamp}-{rand}` if the team has shared memory enabled.
 
 ### Adding an LLM Adapter
 

@@ -58,6 +58,14 @@ export interface PoolStatus {
 export class AgentPool {
   private readonly agents: Map<string, Agent> = new Map()
   private readonly semaphore: Semaphore
+  /**
+   * Per-agent mutex (Semaphore(1)) to serialize concurrent runs on the same
+   * Agent instance.  Without this, two tasks assigned to the same agent could
+   * race on mutable instance state (`status`, `messages`, `tokenUsage`).
+   *
+   * @see https://github.com/anthropics/open-multi-agent/issues/72
+   */
+  private readonly agentLocks: Map<string, Semaphore> = new Map()
   /** Cursor used by `runAny` for round-robin dispatch. */
   private roundRobinIndex = 0
 
@@ -67,6 +75,16 @@ export class AgentPool {
    */
   constructor(private readonly maxConcurrency: number = 5) {
     this.semaphore = new Semaphore(maxConcurrency)
+  }
+
+  /**
+   * Pool semaphore slots not currently held (`maxConcurrency - active`).
+   * Used to avoid deadlocks when a nested `run()` would wait forever for a slot
+   * held by the parent run. Best-effort only if multiple nested runs start in
+   * parallel after the same synchronous check.
+   */
+  get availableRunSlots(): number {
+    return this.maxConcurrency - this.semaphore.active
   }
 
   // -------------------------------------------------------------------------
@@ -86,6 +104,7 @@ export class AgentPool {
       )
     }
     this.agents.set(agent.name, agent)
+    this.agentLocks.set(agent.name, new Semaphore(1))
   }
 
   /**
@@ -98,6 +117,7 @@ export class AgentPool {
       throw new Error(`AgentPool: agent '${name}' is not registered.`)
     }
     this.agents.delete(name)
+    this.agentLocks.delete(name)
   }
 
   /**
@@ -130,7 +150,41 @@ export class AgentPool {
     runOptions?: Partial<RunOptions>,
   ): Promise<AgentRunResult> {
     const agent = this.requireAgent(agentName)
+    const agentLock = this.agentLocks.get(agentName)!
 
+    // Acquire per-agent lock first so the second call for the same agent waits
+    // here without consuming a pool slot.  Then acquire the pool semaphore.
+    await agentLock.acquire()
+    try {
+      await this.semaphore.acquire()
+      try {
+        return await agent.run(prompt, runOptions)
+      } finally {
+        this.semaphore.release()
+      }
+    } finally {
+      agentLock.release()
+    }
+  }
+
+  /**
+   * Run a prompt on a caller-supplied Agent instance, acquiring only the pool
+   * semaphore — no per-agent lock, no registry lookup.
+   *
+   * Designed for delegation: each delegated call should use a **fresh** Agent
+   * instance (matching `delegate_to_agent`'s "runs in a fresh conversation"
+   * semantics), so the per-agent mutex used by {@link run} would be dead
+   * weight and, worse, a deadlock vector for mutual delegation (A→B while
+   * B→A, each caller holding its own `run`'s agent lock).
+   *
+   * The caller is responsible for constructing the Agent; {@link AgentPool}
+   * does not register or track it.
+   */
+  async runEphemeral(
+    agent: Agent,
+    prompt: string,
+    runOptions?: Partial<RunOptions>,
+  ): Promise<AgentRunResult> {
     await this.semaphore.acquire()
     try {
       return await agent.run(prompt, runOptions)
@@ -200,11 +254,18 @@ export class AgentPool {
     const agent = allAgents[this.roundRobinIndex]!
     this.roundRobinIndex = (this.roundRobinIndex + 1) % allAgents.length
 
-    await this.semaphore.acquire()
+    const agentLock = this.agentLocks.get(agent.name)!
+
+    await agentLock.acquire()
     try {
-      return await agent.run(prompt)
+      await this.semaphore.acquire()
+      try {
+        return await agent.run(prompt)
+      } finally {
+        this.semaphore.release()
+      }
     } finally {
-      this.semaphore.release()
+      agentLock.release()
     }
   }
 

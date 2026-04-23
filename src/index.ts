@@ -58,11 +58,14 @@ export { OpenMultiAgent, executeWithRetry, computeRetryDelay } from './orchestra
 export { Scheduler } from './orchestrator/scheduler.js'
 export type { SchedulingStrategy } from './orchestrator/scheduler.js'
 
+export { renderTeamRunDashboard } from './dashboard/render-team-run-dashboard.js'
+
 // ---------------------------------------------------------------------------
 // Agent layer
 // ---------------------------------------------------------------------------
 
 export { Agent } from './agent/agent.js'
+export { LoopDetector } from './agent/loop-detector.js'
 export { buildStructuredOutputInstruction, extractJSON, validateOutput } from './agent/structured-output.js'
 export { AgentPool, Semaphore } from './agent/pool.js'
 export type { PoolStatus } from './agent/pool.js'
@@ -88,17 +91,21 @@ export type { TaskQueueEvent } from './task/queue.js'
 // ---------------------------------------------------------------------------
 
 export { defineTool, ToolRegistry, zodToJsonSchema } from './tool/framework.js'
-export { ToolExecutor } from './tool/executor.js'
+export { ToolExecutor, truncateToolOutput } from './tool/executor.js'
 export type { ToolExecutorOptions, BatchToolCall } from './tool/executor.js'
 export {
   registerBuiltInTools,
   BUILT_IN_TOOLS,
+  ALL_BUILT_IN_TOOLS_WITH_DELEGATE,
   bashTool,
+  delegateToAgentTool,
   fileReadTool,
   fileWriteTool,
   fileEditTool,
+  globTool,
   grepTool,
 } from './tool/built-in/index.js'
+export type { RegisterBuiltInToolsOptions } from './tool/built-in/index.js'
 
 // ---------------------------------------------------------------------------
 // LLM adapters
@@ -106,6 +113,7 @@ export {
 
 export { createAdapter } from './llm/adapter.js'
 export type { SupportedProvider } from './llm/adapter.js'
+export { TokenBudgetExceededError } from './errors.js'
 
 // ---------------------------------------------------------------------------
 // Memory
@@ -142,16 +150,25 @@ export type {
   ToolUseContext,
   AgentInfo,
   TeamInfo,
+  DelegationPoolView,
 
   // Agent
   AgentConfig,
   AgentState,
   AgentRunResult,
+  BeforeRunHookContext,
   ToolCallRecord,
+  LoopDetectionConfig,
+  LoopDetectionInfo,
+  ContextStrategy,
 
   // Team
   TeamConfig,
   TeamRunResult,
+
+  // Dashboard (static HTML)
+  TaskExecutionMetrics,
+  TaskExecutionRecord,
 
   // Task
   Task,
@@ -160,6 +177,7 @@ export type {
   // Orchestrator
   OrchestratorConfig,
   OrchestratorEvent,
+  CoordinatorConfig,
 
   // Trace
   TraceEventType,
